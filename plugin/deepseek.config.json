@@ -1,5 +1,5 @@
 {
-  "apiKey": "sk-1f42e5cce50e4d2fb469a1bc41666af3",
+  "apiKey": "",
   "baseUrl": "https://api.deepseek.com",
   "model": "deepseek-v4-flash",
   "thinking": "disabled"
