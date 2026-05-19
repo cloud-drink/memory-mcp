@@ -1,8 +1,43 @@
 import { db } from "../db.js";
+import fs from "fs";
 import { spawn } from "child_process";
 import path from "path";
 import { fileURLToPath } from "url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const PLUGIN_ID = "memory-mcp-plugin@local-dev";
+const MCP_SERVER_NAME = "memory-mcp";
+function readJsonFile(filePath) {
+    try {
+        return JSON.parse(fs.readFileSync(filePath, "utf8"));
+    }
+    catch {
+        return null;
+    }
+}
+function getClaudeSettings() {
+    const home = process.env.USERPROFILE || process.env.HOME;
+    if (!home)
+        return null;
+    return readJsonFile(path.join(home, ".claude", "settings.json"));
+}
+function isMemoryMcpEnabled() {
+    if (process.env.MEMORY_MCP_HOOKS_DISABLED === "1") {
+        return false;
+    }
+    const settings = getClaudeSettings();
+    if (!settings) {
+        return true;
+    }
+    const pluginEnabled = settings.enabledPlugins?.[PLUGIN_ID];
+    if (settings.enabledPlugins && pluginEnabled !== true) {
+        return false;
+    }
+    const serverConfig = settings.mcpServers?.[MCP_SERVER_NAME];
+    if (serverConfig === false || serverConfig?.disabled === true || serverConfig?.enabled === false) {
+        return false;
+    }
+    return true;
+}
 function startSummaryWorker() {
     const workerPath = path.join(__dirname, "..", "summary-worker.js");
     const child = spawn("node", [workerPath], {
@@ -40,6 +75,10 @@ async function main() {
         process.exit(0);
     }
     const rawInput = await readStdin();
+    if (!isMemoryMcpEnabled()) {
+        console.log(JSON.stringify({ continue: true, suppressOutput: true }));
+        return;
+    }
     let input = {};
     try {
         input = JSON.parse(rawInput);
