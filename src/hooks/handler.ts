@@ -1,16 +1,9 @@
 import { db } from "../db.js";
-import fs from "fs";
 import { spawn } from "child_process";
 import path from "path";
 import { fileURLToPath } from "url";
 
-const DEBUG_LOG = "C:\\Users\\Administrator\\.claude\\plugins\\marketplaces\\local-dev\\memory-mcp\\debug.log";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-function logDebug(message: string) {
-  const timestamp = new Date().toISOString();
-  fs.appendFileSync(DEBUG_LOG, `[${timestamp}] ${message}\n`);
-}
 
 function startSummaryWorker() {
   const workerPath = path.join(__dirname, "..", "summary-worker.js");
@@ -28,12 +21,10 @@ function enqueueSummaryJob(sessionId: string, projectId: string, reason: string)
   const hasActivities = db.getUnfinalizedActivities(sessionId).length > 0;
 
   if (!hasTurns && !hasActivities) {
-    logDebug(`${reason} - No unfinalized data for session ${sessionId}`);
     return null;
   }
 
   const jobId = db.createSummaryJob(detectedProjectId, sessionId, reason);
-  logDebug(`${reason} - Enqueued summary job ${jobId} for session ${sessionId}`);
   startSummaryWorker();
   return jobId;
 }
@@ -57,8 +48,6 @@ async function main() {
   }
 
   const rawInput = await readStdin();
-  logDebug(`--- New Event: ${event} ---`);
-  logDebug(`Input JSON: ${rawInput}`);
 
   let input: any = {};
   try {
@@ -69,7 +58,6 @@ async function main() {
 
   const sessionId = input.session_id || "default";
   const projectId = input.cwd || input.project_dir || input.working_dir || process.cwd();
-  logDebug(`Parsed Context - Session: ${sessionId}, Project: ${projectId}`);
 
   switch (event) {
 
@@ -164,6 +152,5 @@ async function main() {
 }
 
 main().catch((err) => {
-  logDebug(`Fatal Error: ${err}`);
   process.exit(0);
 });
