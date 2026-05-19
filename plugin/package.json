@@ -1,0 +1,6 @@
+{
+  "name": "memory-mcp-plugin",
+  "version": "1.0.0",
+  "description": "Automation hooks for memory-mcp",
+  "private": true
+}

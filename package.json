@@ -1,0 +1,37 @@
+{
+  "name": "memory-mcp",
+  "version": "1.0.0",
+  "description": "Cross-session long-term memory and audit server for agents",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc && xcopy /E /I /Y src\\static dist\\static",
+    "start": "node dist/index.js",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "test-db": "tsc && node dist/example/test-db.js",
+    "viewer": "npm run build && node dist/viewer.js"
+  },
+  "keywords": [
+    "mcp",
+    "memory",
+    "audit"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "better-sqlite3": "^12.10.0",
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "uuid": "^14.0.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.9.0",
+    "@types/uuid": "^10.0.0",
+    "typescript": "^6.0.3"
+  }
+}

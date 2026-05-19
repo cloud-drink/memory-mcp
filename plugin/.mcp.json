@@ -1,0 +1,6 @@
+{
+  "memory-mcp": {
+    "command": "node",
+    "args": ["C:\\Users\\Administrator\\.claude\\plugins\\marketplaces\\local-dev\\memory-mcp\\dist\\index.js"]
+  }
+}
