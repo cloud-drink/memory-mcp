@@ -49,6 +49,25 @@ class MemoryDB {
         is_finalized INTEGER DEFAULT 0,
         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
       );
+
+      CREATE TABLE IF NOT EXISTS summary_jobs (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        attempts INTEGER NOT NULL DEFAULT 0,
+        error TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_summary_jobs_status_created
+      ON summary_jobs(status, created_at);
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_summary_jobs_open_session
+      ON summary_jobs(session_id)
+      WHERE status IN ('pending', 'processing');
     `);
         // Migrate older databases that lack the column
         for (const migration of [
@@ -197,6 +216,82 @@ class MemoryDB {
     deleteProjectActivities(project_id) {
         const result = this.db.prepare('DELETE FROM activity_logs WHERE project_id = ?').run(project_id);
         return result.changes > 0;
+    }
+    createSummaryJob(project_id, session_id, reason) {
+        const existing = this.db.prepare(`
+      SELECT id FROM summary_jobs
+      WHERE session_id = ? AND status IN ('pending', 'processing')
+      LIMIT 1
+    `).get(session_id);
+        if (existing) {
+            return existing.id;
+        }
+        const id = uuidv4();
+        this.db.prepare(`
+      INSERT INTO summary_jobs (id, project_id, session_id, reason)
+      VALUES (?, ?, ?, ?)
+    `).run(id, project_id, session_id, reason);
+        return id;
+    }
+    claimPendingSummaryJob() {
+        const job = this.db.prepare(`
+      SELECT * FROM summary_jobs
+      WHERE status = 'pending'
+      ORDER BY created_at ASC
+      LIMIT 1
+    `).get();
+        if (!job)
+            return null;
+        this.db.prepare(`
+      UPDATE summary_jobs
+      SET status = 'processing',
+          attempts = attempts + 1,
+          error = NULL,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND status = 'pending'
+    `).run(job.id);
+        return this.db.prepare('SELECT * FROM summary_jobs WHERE id = ?').get(job.id);
+    }
+    completeSummaryJob(jobId, summary) {
+        const job = this.db.prepare('SELECT * FROM summary_jobs WHERE id = ?').get(jobId);
+        if (!job) {
+            throw new Error(`Summary job ${jobId} not found`);
+        }
+        const memoryId = this.addMemory(job.project_id, summary, 'auto-summary', job.session_id);
+        this.db.prepare(`
+      UPDATE summary_jobs
+      SET status = 'done',
+          error = NULL,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(jobId);
+        return memoryId;
+    }
+    failSummaryJob(jobId, error) {
+        this.db.prepare(`
+      UPDATE summary_jobs
+      SET status = 'failed',
+          error = ?,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(error, jobId);
+    }
+    getUnfinalizedSessionProject(session_id) {
+        const turn = this.db.prepare(`
+      SELECT project_id FROM raw_turns
+      WHERE session_id = ? AND is_finalized = 0
+      ORDER BY timestamp ASC
+      LIMIT 1
+    `).get(session_id);
+        if (turn)
+            return turn.project_id;
+        const activity = this.db.prepare(`
+      SELECT project_id FROM activity_logs
+      WHERE session_id = ? AND is_finalized = 0
+      ORDER BY timestamp ASC
+      LIMIT 1
+    `).get(session_id);
+        return activity?.project_id || null;
     }
 }
 export const db = new MemoryDB();

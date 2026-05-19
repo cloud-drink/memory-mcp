@@ -52,23 +52,31 @@ app.delete('/api/activities/:id', (req, res) => {
 
 // API: Delete entire projects (category-specific)
 app.delete('/api/projects/:category', (req, res) => {
-  const { category } = req.params;
-  const { project_id } = req.body;
-  
-  if (!project_id) {
-    return res.status(400).json({ success: false, error: 'project_id is required' });
-  }
+  try {
+    const { category } = req.params;
+    const { project_id } = req.body;
+    
+    if (!project_id) {
+      return res.status(400).json({ success: false, error: 'project_id is required' });
+    }
 
-  let success = false;
-  if (category === 'memories') {
-    success = db.deleteProjectMemories(project_id);
-  } else if (category === 'turns') {
-    success = db.deleteProjectTurns(project_id);
-  } else if (category === 'activities') {
-    success = db.deleteProjectActivities(project_id);
-  }
+    let success = false;
+    if (category === 'memories') {
+      success = db.deleteProjectMemories(project_id);
+    } else if (category === 'turns') {
+      success = db.deleteProjectTurns(project_id);
+    } else if (category === 'activities') {
+      success = db.deleteProjectActivities(project_id);
+    } else {
+      return res.status(400).json({ success: false, error: `Unknown project category: ${category}` });
+    }
 
-  res.json({ success });
+    res.json({ success });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error('Project delete failed:', message);
+    res.status(500).json({ success: false, error: message });
+  }
 });
 
 app.listen(PORT, () => {

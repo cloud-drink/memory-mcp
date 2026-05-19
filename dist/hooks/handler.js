@@ -1,106 +1,35 @@
 import { db } from "../db.js";
 import fs from "fs";
+import { spawn } from "child_process";
+import path from "path";
+import { fileURLToPath } from "url";
 const DEBUG_LOG = "C:\\Users\\Administrator\\.claude\\plugins\\marketplaces\\local-dev\\memory-mcp\\debug.log";
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 function logDebug(message) {
     const timestamp = new Date().toISOString();
     fs.appendFileSync(DEBUG_LOG, `[${timestamp}] ${message}\n`);
 }
-function extractKeywords(texts, limit) {
-    const stopWords = new Set([
-        "the", "and", "for", "with", "that", "this", "from", "have", "you", "your",
-        "我", "你", "他", "她", "它", "我们", "你们", "他们", "这个", "那个", "现在",
-        "可以", "一下", "一个", "就是", "不是", "什么", "怎么", "请你", "帮我", "进行",
-    ]);
-    const counts = new Map();
-    const combined = texts.join(" ").toLowerCase();
-    const matches = combined.match(/[a-z0-9_./:-]{3,}|[\u4e00-\u9fa5]{2,}/g) || [];
-    for (const rawToken of matches) {
-        const token = rawToken.replace(/^[./:-]+|[./:-]+$/g, "");
-        if (!token || stopWords.has(token) || token.length > 40)
-            continue;
-        counts.set(token, (counts.get(token) || 0) + 1);
-    }
-    return [...counts.entries()]
-        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-        .slice(0, limit)
-        .map(([token]) => token);
+function startSummaryWorker() {
+    const workerPath = path.join(__dirname, "..", "summary-worker.js");
+    const child = spawn("node", [workerPath], {
+        detached: true,
+        stdio: "ignore",
+        windowsHide: true,
+    });
+    child.unref();
 }
-function summarizeRoles(turns) {
-    const userTurns = turns.filter((turn) => turn.role === "user").length;
-    const assistantTurns = turns.filter((turn) => turn.role === "assistant").length;
-    const lines = [
-        `- User messages: ${userTurns}`,
-        `- Assistant messages: ${assistantTurns}`,
-    ];
-    const userKeywords = extractKeywords(turns.filter((turn) => turn.role === "user").map((turn) => turn.content), 12);
-    const assistantKeywords = extractKeywords(turns.filter((turn) => turn.role === "assistant").map((turn) => turn.content), 12);
-    if (userKeywords.length > 0) {
-        lines.push(`- Main user intent keywords: ${userKeywords.join(", ")}`);
-    }
-    if (assistantKeywords.length > 0) {
-        lines.push(`- Main assistant response keywords: ${assistantKeywords.join(", ")}`);
-    }
-    return lines;
-}
-function summarizeActivities(activities) {
-    const toolCounts = new Map();
-    const fileTokens = [];
-    for (const activity of activities) {
-        const current = toolCounts.get(activity.tool_name) || { total: 0, failed: 0 };
-        current.total++;
-        if (!activity.is_success)
-            current.failed++;
-        toolCounts.set(activity.tool_name, current);
-        if (activity.files_accessed) {
-            fileTokens.push(activity.files_accessed);
-        }
-    }
-    const lines = [...toolCounts.entries()]
-        .sort((a, b) => b[1].total - a[1].total || a[0].localeCompare(b[0]))
-        .map(([tool, count]) => `- ${tool}: ${count.total} call(s), ${count.failed} failed`);
-    const fileKeywords = extractKeywords(fileTokens, 12);
-    if (fileKeywords.length > 0) {
-        lines.push(`- Referenced file/path keywords: ${fileKeywords.join(", ")}`);
-    }
-    return lines;
-}
-function buildAutoSummary(sessionId) {
-    const turns = db.getUnfinalizedTurns(sessionId);
-    const activities = db.getUnfinalizedActivities(sessionId);
-    if (turns.length === 0 && activities.length === 0) {
+function enqueueSummaryJob(sessionId, projectId, reason) {
+    const detectedProjectId = db.getUnfinalizedSessionProject(sessionId) || projectId;
+    const hasTurns = db.getUnfinalizedTurns(sessionId).length > 0;
+    const hasActivities = db.getUnfinalizedActivities(sessionId).length > 0;
+    if (!hasTurns && !hasActivities) {
+        logDebug(`${reason} - No unfinalized data for session ${sessionId}`);
         return null;
     }
-    const projectId = turns[0]?.project_id ||
-        activities[0]?.project_id ||
-        "unknown";
-    const lines = [
-        `Auto-summary for session ${sessionId}`,
-        `Project: ${projectId}`,
-        `Conversation turns: ${turns.length}`,
-        `Tool activities: ${activities.length}`,
-    ];
-    if (turns.length > 0) {
-        lines.push("", "Extracted conversation summary:");
-        lines.push(...summarizeRoles(turns));
-    }
-    if (activities.length > 0) {
-        lines.push("", "Tool activity summary:");
-        lines.push(...summarizeActivities(activities));
-    }
-    return {
-        projectId,
-        summary: lines.join("\n"),
-    };
-}
-function saveAutoSummary(sessionId, reason) {
-    const result = buildAutoSummary(sessionId);
-    if (!result) {
-        logDebug(`${reason} - No unfinalized data for session ${sessionId}`);
-        return false;
-    }
-    const id = db.addMemory(result.projectId, result.summary, "auto-summary", sessionId);
-    logDebug(`${reason} - Saved auto-summary ${id} for session ${sessionId}`);
-    return true;
+    const jobId = db.createSummaryJob(detectedProjectId, sessionId, reason);
+    logDebug(`${reason} - Enqueued summary job ${jobId} for session ${sessionId}`);
+    startSummaryWorker();
+    return jobId;
 }
 async function readStdin() {
     return new Promise((resolve) => {
@@ -169,18 +98,18 @@ async function main() {
             console.log(JSON.stringify({ continue: true, suppressOutput: true }));
             break;
         case "SessionStart": {
-            let summarizedCount = 0;
+            let queuedCount = 0;
             for (const pid of db.getAllProjectIds()) {
                 for (const sid of db.getUnfinalizedSessions(pid)) {
-                    if (sid !== sessionId && saveAutoSummary(sid, "SessionStart")) {
-                        summarizedCount++;
+                    if (sid !== sessionId && enqueueSummaryJob(sid, pid, "SessionStart")) {
+                        queuedCount++;
                     }
                 }
             }
-            if (summarizedCount > 0) {
+            if (queuedCount > 0) {
                 console.log(JSON.stringify({
                     continue: true,
-                    systemMessage: `[MEMORY-MCP] Saved ${summarizedCount} previous session summary record(s) to long-term memory.`
+                    systemMessage: `[MEMORY-MCP] Queued ${queuedCount} previous session(s) for background summarization.`
                 }));
             }
             else {
@@ -201,11 +130,11 @@ async function main() {
             console.log(JSON.stringify({ continue: true, suppressOutput: true }));
             break;
         case "PreCompact": {
-            const saved = saveAutoSummary(sessionId, "PreCompact");
-            if (saved) {
+            const jobId = enqueueSummaryJob(sessionId, projectId, "PreCompact");
+            if (jobId) {
                 console.log(JSON.stringify({
                     continue: true,
-                    systemMessage: `[MEMORY-MCP] Context compaction detected. Current session was summarized and saved to long-term memory.`
+                    systemMessage: `[MEMORY-MCP] Context compaction detected. Current session was queued for background summarization.`
                 }));
             }
             else {

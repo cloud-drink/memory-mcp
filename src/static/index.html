@@ -223,6 +223,32 @@
             z-index: 5;
         }
 
+        .project-title-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            min-width: 0;
+        }
+
+        .project-title-row h3 {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .project-delete-btn {
+            flex: 0 0 auto;
+            pointer-events: auto;
+            text-decoration: none;
+            font-weight: normal;
+            font-size: 0.75rem;
+            padding: 4px 8px;
+            border: 1px solid var(--danger-color);
+            border-radius: 4px;
+            background: white;
+            line-height: 1.2;
+        }
+
         #detail-modal {
             display: none;
             position: fixed;
@@ -396,12 +422,14 @@
         container.innerHTML = pids.map((pid, idx) => {
             const items = grouped[pid];
             const listId = `${prefix}-list-${idx}`;
+            const safePid = escapeHtml(pid);
+            const safeCategory = escapeHtml(category);
             return `
                 <div class="project-group">
                     <div class="project-header" onclick="toggleElement('${listId}')">
-                        <div style="display: flex; align-items: center; gap: 10px;">
-                            <h3>📁 ${pid}</h3>
-                            <button class="delete-btn" style="text-decoration: none; font-weight: normal; font-size: 0.7rem; padding: 2px 6px; border: 1px solid var(--danger-color); border-radius: 4px;" onclick="event.stopPropagation(); deleteProject('${category}', '${pid}')">Delete Project</button>
+                        <div class="project-title-row">
+                            <h3>📁 ${safePid}</h3>
+                            <button type="button" class="delete-btn project-delete-btn" data-category="${safeCategory}" data-project-id="${safePid}">Delete Project</button>
                         </div>
                         <span>${items.length} entries</span>
                     </div>
@@ -411,6 +439,15 @@
                 </div>
             `;
         }).join('');
+    }
+
+    function escapeHtml(value) {
+        return String(value)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#039;");
     }
 
     function renderMemories() {
@@ -423,7 +460,7 @@
                         <span class="type">${m.type}</span>
                         <button class="delete-btn" onclick="event.stopPropagation(); deleteRecord('memories', '${m.id}')">Delete</button>
                     </div>
-                    <div class="content">${preview.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</div>
+                    <div class="content">${escapeHtml(preview)}</div>
                     <div style="font-size: 0.75rem; color: #999;">
                         ${new Date(m.created_at).toLocaleString()}
                     </div>
@@ -445,7 +482,7 @@
                         </div>
                         <span style="color: #999;">${new Date(t.timestamp).toLocaleString()}</span>
                     </div>
-                    <div class="turn-content">${preview.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</div>
+                    <div class="turn-content">${escapeHtml(preview)}</div>
                 </div>
             `;
         }, '', 'turns');
@@ -462,7 +499,7 @@
                             <div style="font-weight: bold;">${a.tool_name}</div>
                             <button class="delete-btn" onclick="event.stopPropagation(); deleteRecord('activities', '${a.id}')">Delete</button>
                         </div>
-                        <div style="font-size: 0.85rem; color: #444; margin: 4px 0;">${preview.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</div>
+                        <div style="font-size: 0.85rem; color: #444; margin: 4px 0;">${escapeHtml(preview)}</div>
                     </div>
                     <div style="text-align: right; font-size: 0.8rem; color: #999; min-width: 80px; margin-left: 10px;">
                         ${new Date(a.timestamp).toLocaleTimeString()}<br>
@@ -553,11 +590,26 @@
         }
     }
 
-    async function deleteProject(category, projectId) {
+    document.addEventListener('click', (event) => {
+        const button = event.target.closest('.project-delete-btn');
+        if (!button) return;
+
+        event.preventDefault();
+        event.stopPropagation();
+        deleteProject(button.dataset.category, button.dataset.projectId, button);
+    });
+
+    async function deleteProject(category, projectId, button) {
         const warning = `WARNING: Are you sure you want to delete the entire project "${projectId}" from ${category}?\n\nThis will permanently delete ALL ${category} records for this project. This action cannot be undone.\n\n(Note: This will NOT affect other categories like memories or conversations for this project path.)`;
         
         if (!confirm(warning)) return;
         
+        const originalText = button ? button.textContent : '';
+        if (button) {
+            button.disabled = true;
+            button.textContent = 'Deleting...';
+        }
+
         try {
             const res = await fetch(`/api/projects/${category}`, { 
                 method: 'DELETE',
@@ -565,11 +617,22 @@
                 body: JSON.stringify({ project_id: projectId })
             });
             const result = await res.json();
+            if (!res.ok) {
+                throw new Error(result.error || `Delete failed with status ${res.status}`);
+            }
             if (result.success) {
                 await fetchData(category);
+            } else {
+                alert(result.error || 'No matching records were deleted.');
             }
         } catch (e) {
             console.error('Project delete failed:', e);
+            alert(`Project delete failed: ${e.message || e}`);
+        } finally {
+            if (button) {
+                button.disabled = false;
+                button.textContent = originalText;
+            }
         }
     }
 
